@@ -25,6 +25,7 @@ Read in order on first pass.
 | 08 | [08-ui-screens.md](./08-ui-screens.md) | Screen-by-screen layouts, wireframes, and interactions. |
 | 09 | [09-persistence.md](./09-persistence.md) | SQLite schema, browser cache, in-memory game state. |
 | 10 | [10-glossary.md](./10-glossary.md) | Definitions of session, game, round, turn, etc. |
+| 11 | [11-testing-and-dev.md](./11-testing-and-dev.md) | Local dev setup, test stack (Vitest + Playwright + Mosquitto), CI, manual smoke checklist. |
 
 ## Single-owner concerns
 

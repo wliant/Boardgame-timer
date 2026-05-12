@@ -76,7 +76,8 @@ export type Alert = {
 export type TurnSnapshot = {
   takenAt: EpochMs;
   phase: "Running" | "BetweenRounds";
-  currentPlayerIdx: number;
+  /** Null only when `phase === "BetweenRounds"`. */
+  currentPlayerIdx: number | null;
   remainingMs: Record<Id, DurationMs>;
   roundNumber: number;
   currentOrder: Id[];

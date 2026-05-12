@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { initialState } from "@/server/state/initial";
+
 describe("sanity", () => {
-  it("arithmetic works", () => {
-    expect(1 + 1).toBe(2);
+  it("initial state is Lobby", () => {
+    expect(initialState().phase).toBe("Lobby");
   });
 });

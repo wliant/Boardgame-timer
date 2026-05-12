@@ -1,3 +1,3 @@
-// better-sqlite3 accessor for AppSettings + device registry.
-// See specs/09-persistence.md.
-export {};
+export { openDb } from "./db";
+export { SettingsRepo } from "./repo";
+export { LastSeenThrottle } from "./lastSeen";

@@ -118,7 +118,7 @@ export function reduce(
 ): ReduceResult {
   switch (event.type) {
     case "StartNewSession":
-      return handleStartNewSession(state, lastTickAt);
+      return handleStartNewSession(state, event.config, lastTickAt);
     case "EditConfig":
       return handleEditConfig(state, event.config, lastTickAt);
     case "ConfirmConfig":
@@ -150,15 +150,14 @@ export function reduce(
 
 function handleStartNewSession(
   state: GameState,
+  config: GameConfig,
   lastTickAt: EpochMs | null,
 ): ReduceResult {
   assertPhase(state, ["Lobby"]);
   const events: SseEvent[] = [];
   emitPhaseChange(events, state.phase, "Configuring");
-  // The API layer will EditConfig the draft immediately after. Reducer leaves
-  // state.config alone; the immediate EditConfig fills it.
   return {
-    state: { ...state, phase: "Configuring" },
+    state: { ...state, phase: "Configuring", config: cloneConfig(config) },
     lastTickAt,
     events,
   };
@@ -190,19 +189,19 @@ function handleConfirmConfig(
       failed: ["missing-config"],
     });
   }
-  const result = validateConfig(state.config, appSettings);
+  const result = validateConfig(state.config, appSettings, state.mqtt.connected);
   if (!result.ok) {
-    throw new DomainError("invalid-config", "Config validation failed", {
-      failed: result.failed,
-    });
-  }
-  if (state.config.endOfTurnTrigger === "physical-button") {
-    if (!appSettings.mqttBroker.url || !state.mqtt.connected) {
+    // Surface the MQTT-specific case with its dedicated 409 code; everything
+    // else is a 400 invalid-config.
+    if (result.failed.length === 1 && result.failed[0] === "mqtt-not-connected") {
       throw new DomainError(
         "mqtt-not-connected",
         "MQTT must be configured and connected for physical-button mode",
       );
     }
+    throw new DomainError("invalid-config", "Config validation failed", {
+      failed: result.failed,
+    });
   }
   const config = cloneConfig(state.config);
   const devicesSnapshot = appSettings.devices.map((d) => ({ ...d }));
@@ -235,32 +234,16 @@ function handleStartGame(state: GameState, now: EpochMs): ReduceResult {
   }
   const events: SseEvent[] = [];
   emitPhaseChange(events, state.phase, "Running");
-  // Turn-by-turn mode: ensure starting player's clock is at their budget
-  // (already true after ConfirmConfig, but re-asserting keeps the invariant
-  // for any future EditConfig→ConfirmConfig path).
-  const startIdx = 0;
-  let next: GameState = {
+  // Per spec 06: StartGame does NOT re-initialize currentOrder or remainingMs.
+  // Any AdjustTime deltas applied while in Ready are preserved. Turn-by-turn
+  // budget resets happen on EndTurn / ConfirmNextRoundOrder, not here.
+  const next: GameState = {
     ...state,
     phase: "Running",
-    currentPlayerIdx: startIdx,
+    currentPlayerIdx: 0,
     roundNumber: 1,
     turnStartedAt: now,
   };
-  if (next.config?.mode === "turn-by-turn") {
-    const firstId = next.currentOrder[startIdx];
-    const firstPlayer = firstId
-      ? next.config.players.find((p) => p.id === firstId)
-      : undefined;
-    if (firstId && firstPlayer) {
-      next = {
-        ...next,
-        remainingMs: {
-          ...next.remainingMs,
-          [firstId]: firstPlayer.timeBudgetMs,
-        },
-      };
-    }
-  }
   events.push(makeTurnSwitched(next, now));
   return { state: next, lastTickAt: now, events };
 }
@@ -376,12 +359,11 @@ function handleConfirmNextRoundOrder(
   }
 
   const events: SseEvent[] = [];
-  // Snapshot at BetweenRounds (current player idx is null, so use a synthetic
-  // snapshot — we still want history for Undo to reach BetweenRounds).
+  // Push BetweenRounds snapshot (currentPlayerIdx is null in this phase).
   const snapshot: TurnSnapshot = {
     takenAt: now,
     phase: "BetweenRounds",
-    currentPlayerIdx: 0,
+    currentPlayerIdx: null,
     remainingMs: { ...state.remainingMs },
     roundNumber: state.roundNumber,
     currentOrder: [...state.currentOrder],

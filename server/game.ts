@@ -25,7 +25,6 @@ import { initialState } from "./state/initial";
 import { DomainError } from "./state/errors";
 import type { DomainEvent } from "./state/events";
 import { realClock, startTickLoop, type TickLoop } from "./timer";
-import { commitElapsed } from "./state/tickCore";
 
 type GameSingleton = {
   state: GameState;
@@ -105,7 +104,6 @@ function init(): GameSingleton {
       emit: (ev) => sse.emit(ev),
     },
     realClock,
-    commitElapsed,
   );
 
   log.info("game singleton booted");

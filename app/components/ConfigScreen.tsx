@@ -37,11 +37,13 @@ type ValidationIssue =
   | "player-budget"
   | "missing-device"
   | "duplicate-device"
-  | "unknown-device";
+  | "unknown-device"
+  | "mqtt-not-connected";
 
 function validate(
   config: GameConfig,
   devices: AppSettings["devices"],
+  mqttConnected: boolean,
 ): ValidationIssue[] {
   const issues = new Set<ValidationIssue>();
   if (config.players.length < 2 || config.players.length > 8) issues.add("player-count");
@@ -61,6 +63,7 @@ function validate(
         seen.add(p.assignedDeviceId);
       }
     }
+    if (!mqttConnected) issues.add("mqtt-not-connected");
   }
   return [...issues];
 }
@@ -83,21 +86,42 @@ export function ConfigScreen({
   const [endConfirm, setEndConfirm] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  // Re-seed the local draft if the server's config arrives with a structurally
+  // different player set (e.g. another tab edited, or initial state arrived
+  // after mount with config=null). Compares by the sorted id list so simple
+  // text edits don't clobber what the user is currently typing.
+  useEffect(() => {
+    if (!game.config) return;
+    const localIds = draftRef.current.players.map((p) => p.id).sort().join(",");
+    const serverIds = game.config.players.map((p) => p.id).sort().join(",");
+    if (localIds !== serverIds) {
+      setDraft(game.config);
+    }
+  }, [game.config]);
 
   // Push draft to server (debounced).
+  const flushPersist = async (config: GameConfig): Promise<void> => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    inFlightRef.current = true;
+    try {
+      await api.putConfig(config);
+    } finally {
+      inFlightRef.current = false;
+    }
+  };
+
   const persist = (config: GameConfig) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
-      void api
-        .putConfig(config)
-        .catch((err: unknown) => {
-          console.error("config persist", err);
-        })
-        .finally(() => {
-          inFlightRef.current = false;
-        });
+      void flushPersist(config).catch((err: unknown) => {
+        console.error("config persist", err);
+      });
     }, DEBOUNCE_MS);
   };
 
@@ -113,13 +137,18 @@ export function ConfigScreen({
   }, []);
 
   const issues = useMemo(
-    () => validate(draft, settings?.devices ?? []),
-    [draft, settings?.devices],
+    () => validate(draft, settings?.devices ?? [], game.mqtt.connected),
+    [draft, settings?.devices, game.mqtt.connected],
   );
 
   const confirm = async () => {
     if (issues.length > 0) return;
     try {
+      // Flush any pending edit so the server confirms the latest draft, not
+      // an in-flight intermediate one.
+      if (debounceRef.current) {
+        await flushPersist(draft);
+      }
       await api.confirmConfig();
     } catch (err) {
       alert(`Could not confirm: ${(err as Error).message}`);
@@ -322,6 +351,8 @@ function humanIssue(issue: ValidationIssue): string {
       return "Each device may only be assigned to one player.";
     case "unknown-device":
       return "A player is assigned to a device that no longer exists.";
+    case "mqtt-not-connected":
+      return "Physical-button mode requires the MQTT broker to be connected.";
   }
 }
 

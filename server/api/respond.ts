@@ -50,12 +50,6 @@ export function handleError(err: unknown): NextResponse<ApiError> {
   if (err instanceof DomainError) {
     return errorResponse(err.code, err.message, err.details);
   }
-  if (err instanceof Error) {
-    const maybeCoded = err as Error & { code?: string };
-    if (maybeCoded.code === "device-in-use") {
-      return errorResponse("device-in-use", err.message);
-    }
-  }
   const msg = err instanceof Error ? err.message : "Unexpected error";
   return errorResponse("internal-error", msg);
 }

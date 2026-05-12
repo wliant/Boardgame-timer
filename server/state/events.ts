@@ -3,7 +3,7 @@
 import type { DurationMs, GameConfig, Id } from "@/shared/types";
 
 export type DomainEvent =
-  | { type: "StartNewSession" }
+  | { type: "StartNewSession"; config: GameConfig }
   | { type: "EditConfig"; config: GameConfig }
   | { type: "ConfirmConfig" }
   | { type: "StartGame" }

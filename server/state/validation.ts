@@ -12,7 +12,8 @@ export type ValidationRule =
   | "missing-device"
   | "unknown-device"
   | "duplicate-device"
-  | "stray-device-assignment";
+  | "stray-device-assignment"
+  | "mqtt-not-connected";
 
 export type ValidationResult =
   | { ok: true }
@@ -25,6 +26,7 @@ const VALID_ORDERS = new Set(["fixed", "rotating"]);
 export function validateConfig(
   config: GameConfig,
   settings: AppSettings,
+  mqttConnected = false,
 ): ValidationResult {
   const failed = new Set<ValidationRule>();
 
@@ -56,6 +58,10 @@ export function validateConfig(
       if (!exists) failed.add("unknown-device");
       if (seen.has(p.assignedDeviceId)) failed.add("duplicate-device");
       seen.add(p.assignedDeviceId);
+    }
+    // Spec 03 §rule 7: MQTT must be configured AND connected.
+    if (!settings.mqttBroker.url || !mqttConnected) {
+      failed.add("mqtt-not-connected");
     }
   } else {
     for (const p of config.players) {

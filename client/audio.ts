@@ -59,15 +59,7 @@ export function startAlertLoop(): void {
   oscillator.connect(gain);
   gain.connect(ctx.destination);
   oscillator.start();
-  let on = false;
-  const tick = () => {
-    if (!gain || !ctx) return;
-    on = !on;
-    gain.gain.setValueAtTime(on ? 0.2 : 0, ctx.currentTime);
-  };
-  // 200 ms on, 800 ms off → toggle every 200 ms then every 800 ms.
-  // Simpler: flip every 500ms gives ~1Hz with 50% duty. The spec asks 200/800.
-  // We implement two phases via alternating setTimeout.
+  // 1 Hz cycle: 200 ms on, 800 ms off (spec 04 §audio implementation).
   const cycle = () => {
     if (!gain || !ctx) return;
     gain.gain.setValueAtTime(0.2, ctx.currentTime);
@@ -78,7 +70,6 @@ export function startAlertLoop(): void {
   };
   cycle();
   gateInterval = setInterval(cycle, 1000);
-  void tick;
 }
 
 export function stopAlertLoop(): void {

@@ -7,6 +7,8 @@ import type { Database as Db } from "better-sqlite3";
 
 import type { AppSettings, Device, EpochMs, Id } from "@/shared/types";
 
+import { DomainError } from "../state/errors";
+
 type AppSettingsRow = {
   id: number;
   broker_url: string;
@@ -80,9 +82,10 @@ export class SettingsRepo {
 
     for (const id of existingIds) {
       if (!incomingIds.has(id) && lockedDeviceIds.has(id)) {
-        const err = new Error(`Device ${id} is in use by the current game`);
-        (err as Error & { code?: string }).code = "device-in-use";
-        throw err;
+        throw new DomainError(
+          "device-in-use",
+          `Device ${id} is in use by the current game`,
+        );
       }
     }
 
@@ -169,9 +172,10 @@ export class SettingsRepo {
       patch.topic !== existing.topic &&
       lockedDeviceIds.has(id)
     ) {
-      const err = new Error(`Cannot change topic of in-use device ${id}`);
-      (err as Error & { code?: string }).code = "device-in-use";
-      throw err;
+      throw new DomainError(
+        "device-in-use",
+        `Cannot change topic of in-use device ${id}`,
+      );
     }
     const name = patch.name ?? existing.name;
     const topic = patch.topic ?? existing.topic;
@@ -196,9 +200,10 @@ export class SettingsRepo {
     const existing = this.getDevice(id);
     if (!existing) return false;
     if (lockedDeviceIds.has(id)) {
-      const err = new Error(`Device ${id} is in use by the current game`);
-      (err as Error & { code?: string }).code = "device-in-use";
-      throw err;
+      throw new DomainError(
+        "device-in-use",
+        `Device ${id} is in use by the current game`,
+      );
     }
     this.db.prepare("DELETE FROM devices WHERE id = ?").run(id);
     return true;

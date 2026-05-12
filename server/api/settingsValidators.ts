@@ -32,8 +32,9 @@ export function asDevice(input: unknown, requireId: boolean): Device | string {
     return "device.name must be 1-40 chars";
   if (!isString(obj["topic"])) return "device.topic must be a string";
   if (obj["topic"].trim().length === 0) return "device.topic must be non-empty";
+  const id = isString(obj["id"]) ? obj["id"] : "";
   const out: Device = {
-    id: (obj["id"] as string) ?? "",
+    id,
     name: obj["name"],
     topic: obj["topic"],
   };
@@ -58,9 +59,12 @@ export function asAppSettings(input: unknown): AppSettings | string {
   if (typeof broker === "string") return broker;
   if (!Array.isArray(obj["devices"])) return "devices must be an array";
   const devices: Device[] = [];
+  const seenIds = new Set<string>();
   for (const d of obj["devices"]) {
     const parsed = asDevice(d, true);
     if (typeof parsed === "string") return parsed;
+    if (seenIds.has(parsed.id)) return `duplicate device id ${parsed.id}`;
+    seenIds.add(parsed.id);
     devices.push(parsed);
   }
   return { mqttBroker: broker, devices };

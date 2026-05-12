@@ -117,7 +117,7 @@ describe("validateConfig", () => {
     if (!r.ok) expect(r.failed).toContain("duplicate-device");
   });
 
-  it("accepts physical-button with valid distinct devices", () => {
+  it("accepts physical-button with valid distinct devices when MQTT is connected", () => {
     const a = makeDevice({ name: "A" });
     const b = makeDevice({ name: "B" });
     const config = makeGameConfig({
@@ -127,7 +127,45 @@ describe("validateConfig", () => {
         makePlayerConfig({ assignedDeviceId: b.id }),
       ],
     });
-    const settings = makeAppSettings({ devices: [a, b] });
-    expect(validateConfig(config, settings)).toEqual({ ok: true });
+    const settings = makeAppSettings({
+      mqttBroker: { url: "mqtt://broker", clientId: "x" },
+      devices: [a, b],
+    });
+    expect(validateConfig(config, settings, true)).toEqual({ ok: true });
+  });
+
+  it("rejects physical-button when MQTT is not connected", () => {
+    const a = makeDevice({ name: "A" });
+    const b = makeDevice({ name: "B" });
+    const config = makeGameConfig({
+      endOfTurnTrigger: "physical-button",
+      players: [
+        makePlayerConfig({ assignedDeviceId: a.id }),
+        makePlayerConfig({ assignedDeviceId: b.id }),
+      ],
+    });
+    const settings = makeAppSettings({
+      mqttBroker: { url: "mqtt://broker", clientId: "x" },
+      devices: [a, b],
+    });
+    const r = validateConfig(config, settings, false);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.failed).toContain("mqtt-not-connected");
+  });
+
+  it("rejects physical-button when broker URL is empty", () => {
+    const a = makeDevice({ name: "A" });
+    const b = makeDevice({ name: "B" });
+    const config = makeGameConfig({
+      endOfTurnTrigger: "physical-button",
+      players: [
+        makePlayerConfig({ assignedDeviceId: a.id }),
+        makePlayerConfig({ assignedDeviceId: b.id }),
+      ],
+    });
+    const settings = makeAppSettings({ devices: [a, b] }); // url default ''
+    const r = validateConfig(config, settings, true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.failed).toContain("mqtt-not-connected");
   });
 });

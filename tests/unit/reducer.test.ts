@@ -30,8 +30,11 @@ function step(
 describe("reducer — phase transitions", () => {
   it("Lobby → Configuring via StartNewSession", () => {
     const s = initialState();
-    const r = step(s, { type: "StartNewSession" });
+    const config = makeGameConfig();
+    const r = step(s, { type: "StartNewSession", config });
     expect(r.state.phase).toBe("Configuring");
+    expect(r.state.config).not.toBeNull();
+    expect(r.state.config?.players.length).toBe(config.players.length);
     checkInvariants(r.state);
   });
 
@@ -86,6 +89,16 @@ describe("reducer — phase transitions", () => {
     expect(r.state.turnStartedAt).toBe(T0);
     expect(r.lastTickAt).toBe(T0);
     checkInvariants(r.state);
+  });
+
+  it("StartGame preserves AdjustTime deltas applied in Ready (turn-by-turn)", () => {
+    const s = readyState({ n: 2, budgetMs: 5_000, mode: "turn-by-turn" });
+    const p0 = s.config!.players[0]!.id;
+    const r1 = step(s, { type: "AdjustTime", playerId: p0, deltaMs: 2_000 });
+    expect(r1.state.remainingMs[p0]).toBe(7_000);
+    const r2 = step(r1.state, { type: "StartGame" }, { now: T0 });
+    // Spec 06: StartGame does NOT re-initialize remainingMs.
+    expect(r2.state.remainingMs[p0]).toBe(7_000);
   });
 
   it("Running → Paused via Pause; commits partial tick", () => {

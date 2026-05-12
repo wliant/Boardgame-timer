@@ -4,6 +4,8 @@
 import type { SseEvent } from "@/shared/events";
 import type { EpochMs, GameState, Id } from "@/shared/types";
 
+import { commitElapsed } from "../state/tickCore";
+
 import type { Clock } from "./clock";
 
 export type TickHandlers = {
@@ -19,21 +21,13 @@ export type TickLoop = { stop: () => void };
 const TICK_INTERVAL_MS = 100;
 const PUSH_INTERVAL_MS = 250;
 
-export function startTickLoop(
-  handlers: TickHandlers,
-  clock: Clock,
-  commit: (
-    state: GameState,
-    now: EpochMs,
-    lastTickAt: EpochMs | null,
-  ) => { state: GameState; events: SseEvent[]; lastTickAt: EpochMs | null },
-): TickLoop {
+export function startTickLoop(handlers: TickHandlers, clock: Clock): TickLoop {
   const tick = clock.setInterval(() => {
     const now = clock.now();
     const state = handlers.getState();
     const lastTickAt = handlers.getLastTickAt();
     if (state.phase !== "Running" || lastTickAt == null) return;
-    const result = commit(state, now, lastTickAt);
+    const result = commitElapsed(state, now, lastTickAt);
     handlers.setState(result.state);
     handlers.setLastTickAt(result.lastTickAt);
     for (const ev of result.events) handlers.emit(ev);

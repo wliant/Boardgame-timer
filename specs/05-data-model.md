@@ -21,7 +21,8 @@ Persistent application settings. Stored server-side in SQLite (see `09-persisten
 
 ```ts
 export type MqttBrokerConfig = {
-  url: string;            // e.g. "mqtt://10.0.0.5:1883" or "mqtts://broker.example:8883"
+  /** Broker URL. Empty string means "no broker configured" — server does not attempt to connect. */
+  url: string;
   username?: string;
   password?: string;
   clientId: string;       // default: "boardgame-timer-<random>"
@@ -123,8 +124,7 @@ export type Phase =
   | 'Ready'
   | 'Running'
   | 'Paused'
-  | 'BetweenRounds'
-  | 'Ended';
+  | 'BetweenRounds';
 
 export type AlertKind = 'total-out' | 'turn-out';
 
@@ -149,7 +149,7 @@ export type GameState = {
   config: GameConfig | null;
   /** Devices captured at ConfirmConfig — frozen snapshot used by the running game even if AppSettings.devices is edited later. */
   devicesSnapshot: Device[];
-  /** Index into currentOrder. Undefined when phase is 'Lobby' | 'Configuring' | 'Ready' | 'Ended'. */
+  /** Index into currentOrder. Null when phase is 'Lobby' | 'Configuring' | 'Ready' (set to 0 by StartGame). */
   currentPlayerIdx: number | null;
   /** 1-based round counter. 1 at StartGame; incremented when a round completes. */
   roundNumber: number;
@@ -159,7 +159,9 @@ export type GameState = {
   remainingMs: Record<Id, DurationMs>;
   /** Set when phase is 'Running'; the wall-clock instant at which the current player became active. Null otherwise. */
   turnStartedAt: EpochMs | null;
-  /** Active alerts. Cleared by DismissAlert, AdjustTime crossing back above zero, or EndTurn (for turn-out). */
+  /** Active alerts. Cleared by DismissAlert, AdjustTime lifting the player above zero, EndTurn
+   *  (clears any 'turn-out' alert on the outgoing player), Undo (drops alerts raised after the
+   *  snapshot), Restart, and EndGame. */
   alerts: Alert[];
   /** Undo stack. Pushed on EndTurn and ConfirmNextRoundOrder. Cleared on Restart and EndGame. */
   history: TurnSnapshot[];
@@ -210,5 +212,11 @@ The reducer MUST maintain these invariants at all times:
 5. `state.alerts` contains at most one entry per `(playerId, kind)` pair.
 6. `state.history` is non-empty implies the game has had at least one `EndTurn` or `ConfirmNextRoundOrder` since the last `Restart`/`StartGame`.
 7. While `state.config.endOfTurnTrigger === 'physical-button'`, every `PlayerConfig.assignedDeviceId` MUST reference a device id present in `state.devicesSnapshot`.
+8. `state.history` items each carry `phase ∈ { 'Running', 'BetweenRounds' }`. No other phase value MAY appear in a snapshot.
+9. `state.turnStartedAt` is reset by `StartGame`, `EndTurn` (when staying in `Running`), `ConfirmNextRoundOrder`, and `Undo` landing in `Running`. It is set to `null` whenever `state.phase` leaves `Running`.
 
 Any reducer code path that would violate one of these MUST instead reject the event with an appropriate error (see `06-server-api.md`).
+
+## State-shape transitions caused by `Restart` and `EndGame`
+
+See `02-session-lifecycle.md#restart-vs-end-game` for the exhaustive table of field-level effects. The reducer MUST set every listed field to the value stated there.

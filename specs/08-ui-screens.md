@@ -34,7 +34,11 @@ Components:
 
 - **Start new session** button — fires `StartNewSession`. On success the phase becomes `Configuring` and the page swaps to the Timer Configuration screen.
 - **Settings** link in the header — navigates to `/settings`.
-- **MQTT status line** — shows `connected` (green) or `disconnected: <error>` (red) from `state.mqtt`.
+- **MQTT status line** — shows one of:
+  - `MQTT: not configured — open Settings to set the broker URL` (when `AppSettings.mqttBroker.url === ''`).
+  - `MQTT: connected (mqtt://10.0.0.5)` in green (when `state.mqtt.connected === true`).
+  - `MQTT: disconnected — <lastError>` in red (when `url` is set but not connected).
+- **First-run hint** — when `state.mqtt.lastError === 'no-broker-configured'`, a small panel below the Start button reads: "MQTT broker not configured. Physical buttons won't work until you set the broker URL in Settings. You can still start a session using screen-tap end-of-turn."
 
 ## 8.2 Settings
 
@@ -126,7 +130,7 @@ Components:
 - **Confirm Configuration** button — fires `ConfirmConfig`. Disabled while validation fails. On success, transitions to `Ready`.
 - **End Game** in header — fires `EndGame`; confirmation modal: "Discard this configuration and return to lobby?"
 
-Each on-screen edit is debounced (200 ms) and persisted via `PUT /api/session/config`. SSE `state-replaced` events update other tabs.
+Each on-screen edit is debounced (200 ms) and persisted via `PUT /api/session/config`. Other tabs see the change via the SSE `state` event the server pushes after the mutation.
 
 ## 8.4 Ready (post-config, pre-start)
 
@@ -189,12 +193,19 @@ Layout:
 - **Active player card** — visually distinct (taller, bordered, prominent timer font). Shows name, current `remainingMs` (interpolated, see `04-in-game-behavior.md#timer-tick-model`), and the active indicator `▶`.
 - **Other player cards** — laid out below in a grid. Each shows name and current `remainingMs` (static — non-active players' values don't change unless `AdjustTime` is used).
 - **Alert badge** — a small bell icon next to a player whose `remainingMs <= 0` and has an active `Alert`. A `Dismiss` button under the badge fires `DismissAlert { playerId }` (total-time mode primarily; in turn-by-turn mode the badge appears on the active player and clears on `EndTurn`).
-- **Footer line** — MQTT connection status; transient toasts (e.g. "Press from Blue ignored — not Bob's turn") appear here for ~3 seconds.
+- **Footer line** — MQTT connection status; transient toasts appear here for ~3 seconds. Toast sources:
+  - `press-ignored` SSE events → "Press from `<deviceName>` ignored — `<reason>`". Reasons: `not-current-player` renders as "not `<currentPlayerName>`'s turn"; `not-physical-button-mode`, `unknown-device`, `no-config` render as their literal codes (these are pathological and shouldn't happen at runtime).
+  - REST `invalid-phase` errors → "Action rejected — please refresh".
+- **Broker-loss banner** — when `state.config.endOfTurnTrigger === 'physical-button'` AND `state.mqtt.connected === false`, a prominent banner above the player cards reads: "⚠ MQTT disconnected — physical buttons won't work. Use the on-screen End Turn button." Clears automatically when `state.mqtt.connected` flips to `true`.
 
-Time formatting:
+Time formatting (display):
 
-- Non-negative: `M:SS` for `< 60:00`, `H:MM:SS` for `>= 60:00`.
-- Negative: prefix `-`. E.g. `-0:12`, `-1:03`, `-1:00:05`. The negative display is rendered in red.
+- **Seconds field is always 2 digits, zero-padded.** Minutes are not padded.
+- Non-negative, `< 1 hour`: `M:SS`. Examples: `0:05`, `0:42`, `9:00`, `59:59`.
+- Non-negative, `>= 1 hour`: `H:MM:SS` (minutes ARE padded in this format). Examples: `1:00:05`, `2:34:09`.
+- Negative: prefix with `-`. Same digit rules. Examples: `-0:12`, `-1:03`, `-1:00:05`.
+- The negative display is rendered in red.
+- Input fields on the Configuration screen accept the same display formats and round-trip to milliseconds on save. Empty input is treated as invalid (config validation rule).
 
 Per-card actions:
 
@@ -202,7 +213,7 @@ Per-card actions:
 
 Large End Turn target (touch-friendly):
 
-- Below the active player card, render a full-width "End Turn" button (visible only when `endOfTurnTrigger === 'screen-tap'` OR as an explicit fallback toggle when `physical-button`). This is the primary way to end a turn on a tablet/phone host screen.
+- Below the active player card, render a full-width "End Turn" button. **This button is always present in `Running` regardless of `endOfTurnTrigger`** — in `screen-tap` mode it is the primary control; in `physical-button` mode it is the broker-loss fallback (see `04-in-game-behavior.md#mqtt-broker-loss-during-play`).
 
 `Pause`/`Resume`:
 

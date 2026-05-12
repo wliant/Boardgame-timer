@@ -12,20 +12,20 @@ This document is the **authoritative** source for the session phase state machin
 | `Running` | The active player's clock is decreasing. The tick loop is advancing `remainingMs`. |
 | `Paused` | The active player's clock is frozen. Host has explicitly paused. All other state is preserved. |
 | `BetweenRounds` | **Only reachable when `config.turnOrderMode = 'rotating'`.** A round has just completed and the host is reordering the player list for the next round. Timers are not running. |
-| `Ended` | The game has been terminated by the host. This phase is transient — the next event MUST be `EndGame` returning to `Lobby` (an "End-of-Game" confirmation screen is presented, see `08-ui-screens.md`). |
 
-`Lobby`, `Configuring`, `Ready`, `BetweenRounds`, and `Ended` are non-ticking phases — the timer loop MUST NOT decrement any clock while in these phases. `Running` is the only ticking phase. `Paused` retains all clock values without ticking.
+`Lobby`, `Configuring`, `Ready`, and `BetweenRounds` are non-ticking phases — the timer loop MUST NOT decrement any clock while in these phases. `Running` is the only ticking phase. `Paused` retains all clock values without ticking.
+
+The "End Game" confirmation modal is a **client-only UI overlay** with no corresponding server phase; the server stays in its current phase until the host confirms, at which point `EndGame` is dispatched and the transition fires.
 
 ## Events
 
 | Event | Payload | Semantics |
 | --- | --- | --- |
 | `StartNewSession` | — | Host clicks "Start new session" from the Lobby. Creates a fresh draft `GameConfig`. |
-| `EditConfig` | partial `GameConfig` patch | Host updates one or more fields of the draft config. |
+| `EditConfig` | full `GameConfig` (replacement) | Host replaces the entire draft config. The wire format is `PUT` (whole-object replace), not a partial patch. |
 | `ConfirmConfig` | — | Host confirms the draft config; validation MUST pass (see `03-timer-config.md`). |
 | `StartGame` | — | Host clicks "Start"; the first player's clock begins ticking. |
-| `EndTurn` | `{ source: 'screen-tap' \| 'physical-button', expectedPlayerId? }` | The current turn ends; advance to next player or to `BetweenRounds` if the round is complete and `rotating`. `expectedPlayerId` is set by MQTT-sourced events to guard against stale presses. |
-| `RoundComplete` | — | **Internal event,** emitted by the reducer when `EndTurn` would advance past the last player in the current round. Whether this maps to `Running` (in `fixed` mode) or `BetweenRounds` (in `rotating` mode) is decided by the reducer. |
+| `EndTurn` | `{ source: 'screen-tap' \| 'physical-button', expectedPlayerId? }` | The current turn ends; advance to next player or to `BetweenRounds` if the round is complete and `rotating`. `expectedPlayerId` is set by MQTT-sourced events to guard against stale presses. Round-completion is handled inline by the reducer; there is no separate `RoundComplete` event. |
 | `ConfirmNextRoundOrder` | `playerIds: string[]` | Host has reordered players for the next round; reducer validates that the set of ids matches the configured players and then re-enters `Running` with the first player in the new order. |
 | `Pause` | — | Freezes the active player's clock. |
 | `Resume` | — | Unfreezes the active player's clock. |
@@ -37,7 +37,7 @@ This document is the **authoritative** source for the session phase state machin
 
 ## Transition table
 
-Rows are events; columns are current phases. A cell of `→ X` means transition to phase `X`. A cell of `—` means the event is rejected with HTTP 409 `invalid-phase`.
+Rows are events; columns are current phases. A cell of `→ X` means transition to phase `X` after processing the event. **`→ X` where `X` equals the current phase column is a "no-op" — the event is accepted and its side effects are applied, but the phase does not change.** A cell of `—` means the event is rejected with HTTP 409 `invalid-phase`.
 
 | Event \ Phase | `Lobby` | `Configuring` | `Ready` | `Running` | `Paused` | `BetweenRounds` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -49,7 +49,7 @@ Rows are events; columns are current phases. A cell of `→ X` means transition 
 | `ConfirmNextRoundOrder` | — | — | — | — | — | → `Running` |
 | `Pause` | — | — | — | → `Paused` | — | — |
 | `Resume` | — | — | — | — | → `Running` | — |
-| `Undo` | — | — | — | → `Running` (state restored) | → `Paused` (state restored) | → `Running` (state restored, last turn re-opened) |
+| `Undo` | — | — | — | → snapshot.phase | → `Paused` (state restored, phase override) | → snapshot.phase |
 | `AdjustTime` | — | — | → `Ready` | → `Running` | → `Paused` | → `BetweenRounds` |
 | `DismissAlert` | — | — | — | → `Running` | → `Paused` | — |
 | `EndGame` | — | → `Lobby` (discards draft) | → `Lobby` | → `Lobby` | → `Lobby` | → `Lobby` |
@@ -57,16 +57,33 @@ Rows are events; columns are current phases. A cell of `→ X` means transition 
 
 Notes:
 
-- `Restart` is intentionally allowed from `Running`, `Paused`, and indirectly from `BetweenRounds` (the host first ends the round prompt and then restarts; equivalently, the UI MAY offer Restart directly from `BetweenRounds` — implementer's choice, surface in `08-ui-screens.md`). It is NOT allowed from `Lobby`, `Configuring`, or `Ready`, because there is no game in progress to restart.
+- `Restart` is intentionally allowed from `Running`, `Paused`, and `BetweenRounds`. It is NOT allowed from `Lobby`, `Configuring`, or `Ready`, because there is no game in progress to restart.
 - `EndGame` always returns to `Lobby` and discards the entire `GameState` including `GameConfig`. The next session starts from `Configuring` with a fresh draft.
-- `EditConfig` after `Ready` reverts the phase to `Configuring`; the host must re-confirm.
-- A single-shot **`Ended`** phase is not in the transition table because it is a sub-state of the End-of-Game confirmation modal in `Running`/`Paused`/`BetweenRounds` — `EndGame` transitions directly to `Lobby`. The `Ended` phase value exists only for the brief window between the host clicking "End Game" and confirming; if the host cancels the confirm, the phase remains unchanged.
+- `EditConfig` from `Ready` reverts the phase to `Configuring`; the host must re-confirm.
+- `AdjustTime`, `DismissAlert`, and `EditConfig` rows that show `→ <current phase>` are accepted no-ops at the phase level — they mutate state but do not change `state.phase`.
+
+### `ConfirmConfig` resolution
+
+When `ConfirmConfig` is accepted (validation per `03-timer-config.md` passes):
+
+1. `state.config` = the confirmed draft.
+2. `state.devicesSnapshot` = deep clone of `AppSettings.devices` at this instant.
+3. `state.currentOrder` = `config.players.map(p => p.id)`.
+4. `state.remainingMs` = `{ [p.id]: p.timeBudgetMs for each p in config.players }` — fully rebuilt; any prior keys (e.g. from a removed player after `EditConfig` from `Ready`) are dropped.
+5. `state.currentPlayerIdx = null`.
+6. `state.roundNumber = 0` (incremented to 1 by `StartGame`).
+7. `state.turnStartedAt = null`.
+8. `state.alerts = []`.
+9. `state.history = []`.
+10. `state.phase = 'Ready'`.
+
+This rebuild is unconditional: it runs every time `ConfirmConfig` is accepted, including the case where the host pressed `EditConfig` from `Ready` and then re-confirmed without changes.
 
 ### `EndTurn` resolution
 
 When `EndTurn` is received in `Running`:
 
-1. Snapshot current `(currentPlayerIdx, remainingMs, roundNumber, currentOrder, turnStartedAt)` and push onto `history` (see `04-in-game-behavior.md`).
+1. Push a `TurnSnapshot` (see `05-data-model.md`) onto `state.history` with `phase = 'Running'`, capturing the current `(currentPlayerIdx, remainingMs, roundNumber, currentOrder)` and `takenAt = Date.now()`.
 2. Compute `nextIdx = currentPlayerIdx + 1`.
 3. If `nextIdx < currentOrder.length` — advance: `currentPlayerIdx = nextIdx`, reset `turnStartedAt = Date.now()`, stay in `Running`.
 4. Else (round complete):
@@ -76,15 +93,25 @@ When `EndTurn` is received in `Running`:
 
 ### `Undo` resolution
 
-`Undo` is allowed from `Running`, `Paused`, and `BetweenRounds`. It pops the most recent `TurnSnapshot` and restores:
+`Undo` is allowed from `Running`, `Paused`, and `BetweenRounds`. It pops the most recent `TurnSnapshot` from `state.history` and restores:
 
-- `currentPlayerIdx`
-- `remainingMs` (whole map)
-- `roundNumber`
-- `currentOrder`
-- `turnStartedAt = Date.now()` for the restored active player so their clock continues from the snapshot value
+- `state.currentPlayerIdx = snapshot.currentPlayerIdx`
+- `state.remainingMs = snapshot.remainingMs` (whole map; existing keys not in the snapshot are dropped)
+- `state.roundNumber = snapshot.roundNumber`
+- `state.currentOrder = snapshot.currentOrder`
+- `state.phase = snapshot.phase`, **except**: if the pre-Undo phase was `Paused`, `state.phase` stays `Paused` (the host paused before undoing; they expect to remain paused).
+- `state.turnStartedAt`:
+  - if resulting phase is `Running`, set to `Date.now()` so the restored active player's clock resumes from `snapshot.remainingMs[activePlayerId]`;
+  - otherwise (`Paused` or `BetweenRounds`), set to `null`.
+- `state.alerts`: remove every alert whose `raisedAt > snapshot.takenAt`. Alerts older than the snapshot are kept.
 
-If the snapshot was taken at a `ConfirmNextRoundOrder` step (i.e. it represents the end of round N, before round N+1's order was confirmed), restoring it from `BetweenRounds` is a no-op aside from re-opening the BetweenRounds prompt with the *previous* round's order, allowing the host to re-confirm differently. If the snapshot was taken at an `EndTurn` step, restoring it from `Running` rewinds the most recent turn switch. Undo from `Paused` keeps the phase as `Paused` (the timer remains frozen at the restored value). Undo when `history` is empty is rejected with HTTP 409 `nothing-to-undo`.
+Two cases trace through cleanly:
+
+- **Undo from `Running` after one or more `EndTurn`s in the current round:** the most recent snapshot has `phase = 'Running'`; the previous player becomes active again with the time they had at the end of their turn.
+- **Undo from `BetweenRounds`:** the most recent snapshot is the one pushed by the `EndTurn` that completed the round (its `phase = 'Running'`). Undo therefore returns to `Running` with the last player of the just-completed round active again. The `BetweenRounds` prompt is dismissed.
+- **Undo from `Running` after `ConfirmNextRoundOrder`:** the most recent snapshot is the one pushed at `ConfirmNextRoundOrder` (its `phase = 'BetweenRounds'`). Undo returns to `BetweenRounds` so the host can pick a different next-round order.
+
+Undo when `state.history` is empty is rejected with HTTP 409 `nothing-to-undo`. Undo does NOT itself push a snapshot — see `04-in-game-behavior.md`.
 
 ## State diagram
 
@@ -115,9 +142,13 @@ stateDiagram-v2
 | Aspect | Restart | End Game |
 | --- | --- | --- |
 | Final phase | `Ready` | `Lobby` |
-| `GameConfig` | Preserved | Discarded |
-| `remainingMs` | Reset to each player's `timeBudgetMs` | Cleared |
-| `roundNumber` | Reset to 1 | Cleared |
-| `currentOrder` | Reset to `config.players.map(p => p.id)` | Cleared |
-| `history` | Cleared | Cleared |
+| `GameConfig` | Preserved | Discarded (set to `null`) |
+| `devicesSnapshot` | Preserved | Discarded (set to `[]`) |
+| `remainingMs` | Reset to each player's `timeBudgetMs` | Cleared (`{}`) |
+| `currentOrder` | Reset to `config.players.map(p => p.id)` | Cleared (`[]`) |
+| `currentPlayerIdx` | `null` (set to 0 by a subsequent `StartGame`) | `null` |
+| `roundNumber` | Reset to 0 (set to 1 by `StartGame`) | Cleared |
+| `turnStartedAt` | `null` | `null` |
+| `alerts` | Cleared (`[]`) | Cleared (`[]`) |
+| `history` | Cleared (`[]`) | Cleared (`[]`) |
 | Confirmation modal | Yes — destructive | Yes — destructive |

@@ -15,9 +15,10 @@ The server maintains a single `mqtt.js` client.
 
 | Trigger | Action |
 | --- | --- |
-| Server starts and `AppSettings.mqttBroker.url` is set | Connect on boot. |
-| `PUT /api/settings` changes broker config | Disconnect existing client, connect new one. |
-| `DELETE /api/settings/devices/:id` | Re-subscribe (remove the topic from the subscription list). |
+| Server starts and `AppSettings.mqttBroker.url` is **non-empty** | Connect on boot. |
+| Server starts and `AppSettings.mqttBroker.url` is **empty** (first-run default) | Do NOT connect. `state.mqtt = { connected: false, lastError: 'no-broker-configured', lastConnectedAt: null }`. The UI displays "MQTT: not configured" on the Lobby and prompts the host to visit Settings. |
+| `PUT /api/settings` changes broker URL/credentials | Disconnect existing client; if new URL is non-empty, connect new one; if empty, stay disconnected. |
+| `DELETE /api/settings/devices/:id` | Unsubscribe the topic (after the `device-in-use` check passes). |
 | `POST /api/settings/devices` or `PATCH` that changes a topic | Subscribe to the new topic. |
 
 ### Reconnect strategy
@@ -71,26 +72,37 @@ After a qualifying message for a given **device**, further messages on the same 
 When a qualifying, non-debounced message arrives:
 
 1. Look up the device by id (the subscription handler MUST track which device id each subscription belongs to).
-2. If the current `GameState.config` is null or `config.endOfTurnTrigger !== 'physical-button'`, **log and drop** the press.
-3. Find the player in `state.config.players` whose `assignedDeviceId === device.id`. If no such player, log and drop.
-4. If that player's id is not `state.currentOrder[state.currentPlayerIdx]` (i.e. it is not their turn), log and drop. This guards against the "wrong button pressed" case — only the active player's button advances the turn.
-5. Otherwise, dispatch `EndTurn { source: 'physical-button', expectedPlayerId: player.id }` to the reducer.
+2. If the current `GameState.config` is null → emit `press-ignored { deviceId, deviceName, reason: 'no-config' }` SSE event and stop.
+3. If `state.config.endOfTurnTrigger !== 'physical-button'` → emit `press-ignored { reason: 'not-physical-button-mode' }` and stop.
+4. Find the player in `state.config.players` whose `assignedDeviceId === device.id`. If no such player, emit `press-ignored { reason: 'unknown-device' }` and stop.
+5. If `state.phase !== 'Running'` OR that player's id is not `state.currentOrder[state.currentPlayerIdx]` (i.e. it is not their turn) → emit `press-ignored { reason: 'not-current-player' }` and stop. This guards against the "wrong button pressed" case — only the active player's button advances the turn.
+6. Otherwise, dispatch `EndTurn { source: 'physical-button', expectedPlayerId: player.id }` to the reducer.
 
-Pressed-while-not-your-turn events SHOULD be visible in the UI as a brief "Press ignored: not Bob's turn" toast, but MUST NOT advance the turn or alter state.
+`press-ignored` events MUST be visible in the UI as a brief toast (e.g. "Press from Blue ignored — not Bob's turn"); see `06-server-api.md` for the SSE event shape and `08-ui-screens.md` for the toast presentation.
+
+## Broker loss during play
+
+When the broker disconnects after `ConfirmConfig` and `state.config.endOfTurnTrigger === 'physical-button'`, see `04-in-game-behavior.md#mqtt-broker-loss-during-play`. Summary:
+
+- `state.mqtt.connected` flips to `false`; `mqtt-status` SSE event fires.
+- The In-Game screen surfaces a "physical buttons unavailable — use on-screen End Turn" banner.
+- The reducer does NOT auto-pause; gameplay continues with the screen-tap fallback.
+- Presses received while disconnected are silently lost (no offline buffering — see non-goals in `01-overview.md`).
+- When the broker reconnects, the banner clears; presses resume working immediately.
 
 ## "Listen for press" discovery flow (Settings)
 
 Used in the Settings screen to help the host register a new physical device without having to know the topic.
 
-1. Host clicks "Listen for button" on the Settings screen.
-2. UI calls `POST /api/settings/mqtt-discover` (see `06-server-api.md`).
-3. Server subscribes to the broker's most permissive wildcard (`#` by default; configurable per-broker if `#` is restricted) for the discovery window.
-4. Each unique `(topic, sample payload)` pair seen during the window is streamed as `mqtt-discover-message` SSE events, accumulated in a server-side buffer.
+1. Host clicks "Listen for press" on the Settings screen.
+2. UI calls `POST /api/settings/mqtt-discover` (see `06-server-api.md`). Optional `windowMs` overrides the default 15 s.
+3. Server subscribes to the broker's most permissive wildcard (`#`; if the broker rejects `#`, the spec leaves the fallback wildcard to the implementer — common alternatives are `+/+/+/#` or per-broker ACL-friendly paths) for the discovery window.
+4. Each newly seen `topic` is streamed once as a `mqtt-discover-message` SSE event at first sighting; the server keeps a running buffer accessible via `GET /api/settings/mqtt-discover` for accumulated counts.
 5. Host presses the physical button; its topic appears in the UI within ≤1 second.
 6. Host clicks the topic in the UI to pre-fill the "Add device" form.
 7. Host clicks "Stop listening" → UI calls `DELETE /api/settings/mqtt-discover`, server unsubscribes from the wildcard, retains its game-time subscriptions.
 
-The discovery window also auto-closes after 15 s if not stopped earlier, to avoid leaking permissive subscriptions.
+The discovery window also auto-closes after `windowMs` if not stopped earlier, to avoid leaking permissive subscriptions. While discovery is active, normal game-time subscriptions and press-resolution continue to work (the discovery wildcard is additive).
 
 ## Logging
 

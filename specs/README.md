@@ -47,7 +47,7 @@ When in doubt about where a concept lives, consult this table. Other documents M
 - **Diagrams** — Mermaid syntax inside `mermaid` fenced blocks.
 - **TypeScript** — type signatures are written as TypeScript and are the source of truth for shapes; JSON examples are illustrative only.
 - **Error handling** — see `06-server-api.md` for the shared error envelope. Specs SHOULD enumerate error codes a section can raise rather than catch-all "returns 400".
-- **Phase names** — `Lobby`, `Configuring`, `Ready`, `Running`, `Paused`, `BetweenRounds`, `Ended` are the only valid phase identifiers. They are defined in `02-session-lifecycle.md` and MUST be referenced verbatim elsewhere.
+- **Phase names** — `Lobby`, `Configuring`, `Ready`, `Running`, `Paused`, `BetweenRounds` are the only valid phase identifiers. They are defined in `02-session-lifecycle.md` and MUST be referenced verbatim elsewhere.
 
 ## Versioning
 

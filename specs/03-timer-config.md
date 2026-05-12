@@ -64,9 +64,9 @@ The host may add and remove players freely while phase is `Configuring`. Removin
 7. If `config.endOfTurnTrigger === 'physical-button'`:
    - Every `players[i].assignedDeviceId` references a device in `AppSettings.devices` at confirmation time.
    - The set `{ players[i].assignedDeviceId }` has no duplicates.
-   - The MQTT broker connection is in the `connected` state at confirmation time. If not, `ConfirmConfig` MAY be permitted with a warning (implementer choice), but the spec RECOMMENDS rejecting with error code `mqtt-not-connected` to surface the problem early.
+   - `AppSettings.mqttBroker.url` is non-empty AND `state.mqtt.connected === true` at confirmation time. Otherwise `ConfirmConfig` is rejected with `mqtt-not-connected`. (The server enforces this strictly rather than warning — a silent broker failure would be hard to diagnose mid-game.)
 8. If `config.endOfTurnTrigger === 'screen-tap'`:
-   - Every `players[i].assignedDeviceId` MUST be `null` (the UI MUST clear stale assignments when the trigger is switched away from `physical-button`).
+   - Every `players[i].assignedDeviceId` MUST be `null`. If the host switches from `physical-button` to `screen-tap` without first clearing assignments, the server rejects `ConfirmConfig` with `invalid-config`; the UI SHOULD clear assignments automatically on the radio change to avoid this rejection.
 
 A failed validation returns `400 invalid-config` with a `details` array listing the failing constraint codes (see `06-server-api.md` for the error envelope).
 
@@ -74,7 +74,11 @@ A failed validation returns `400 invalid-config` with a `details` array listing 
 
 - `EditConfig` is allowed only while phase is `Configuring` or `Ready` (see `02-session-lifecycle.md`). Editing in `Ready` reverts the phase to `Configuring` and the host MUST re-confirm.
 - `EditConfig` is REJECTED while phase is `Running`, `Paused`, or `BetweenRounds`. The host MUST `EndGame` first (which discards the config) or `Restart` (which preserves it but returns to `Ready`).
-- `AppSettings.devices` MAY be edited in any phase, but if the running game references a device that gets deleted, the in-memory snapshot taken at `ConfirmConfig` is what the running game uses (see device-assignment rules above).
+- `AppSettings.devices` MAY be edited in any phase, but if the running game's `devicesSnapshot` references a device:
+  - Deleting that device is rejected with `device-in-use`.
+  - Changing the device's `topic` is rejected with `device-in-use`.
+  - Changing only `name` or `acceptedActions` is allowed; the running game continues to use its frozen snapshot.
+- When the host re-confirms a config from `Ready`, the `ConfirmConfig` resolution (see `02-session-lifecycle.md#confirmconfig-resolution`) **unconditionally rebuilds `state.remainingMs`** from the (possibly changed) `config.players` list. Any `AdjustTime` deltas applied while in the prior `Ready` are discarded on re-confirm.
 
 ## Defaults for new configs
 

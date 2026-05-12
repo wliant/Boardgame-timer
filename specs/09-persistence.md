@@ -42,10 +42,12 @@ CREATE INDEX IF NOT EXISTS idx_devices_topic ON devices(topic);
 A migration helper at startup ensures the `app_settings` singleton row exists; if not, it is inserted with defaults:
 
 ```ts
-{ id: 1, broker_url: 'mqtt://localhost:1883', broker_user: null, broker_pass: null,
+{ id: 1, broker_url: '', broker_user: null, broker_pass: null,
   client_id: `boardgame-timer-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
   updated_at: Date.now() }
 ```
+
+`broker_url` defaults to the empty string (not `mqtt://localhost:1883`) so the server does not blindly try to connect to a hypothetical local broker on first boot. The Lobby shows a "MQTT not configured" hint (see `08-ui-screens.md#8-1-lobby`) until the host enters a URL.
 
 ### Mapping to `AppSettings`
 
@@ -73,13 +75,16 @@ The browser caches `AppSettings` in `localStorage` for fast first paint of the S
 
 | Key | Value | Lifecycle |
 | --- | --- | --- |
-| `bgt.settings.v1` | JSON-serialized `AppSettings` | Written by the client every time it receives an `AppSettings` payload (from `GET /api/settings`, `PUT /api/settings`, or SSE `settings-changed`). Read on app boot before the first network call to provide an initial UI. |
+| `bgt.settings` | JSON object `{ schemaVersion: 1, data: <AppSettings> }` | Written by the client every time it receives an `AppSettings` payload (from `GET /api/settings`, `PUT /api/settings`, or SSE `settings-changed`). Read on app boot before the first network call to provide an initial UI. |
 
 Rules:
 
 - The **server is the source of truth**. On every page load, the client SHOULD issue `GET /api/settings` shortly after boot; the response overwrites the cache.
-- If `localStorage` parsing fails (corrupt JSON, schema mismatch), the client deletes the key and proceeds with an empty initial state.
-- The cache key is versioned (`v1`). A future breaking change to the shape MUST bump the version and ignore older caches.
+- The cached object embeds a `schemaVersion: 1` field. On read, the client compares it to the constant baked into the client build:
+  - Match → use the cached `data`.
+  - Mismatch (older or newer than expected) → delete the key and proceed with an empty initial state until `GET /api/settings` returns.
+- If `localStorage` parsing fails (corrupt JSON, missing `schemaVersion`, etc.), the client deletes the key and proceeds with an empty initial state.
+- Future breaking shape changes increment `schemaVersion`. The key name itself does not change.
 
 The browser does NOT cache `GameState`; live state is always fetched fresh via SSE/REST.
 

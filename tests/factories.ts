@@ -1,6 +1,7 @@
-// Test data factories. Per specs/11-testing-and-dev.md these MUST be the only
-// place test data is built — ad-hoc literals in tests lead to drift.
-// Implementations are intentionally stubbed at scaffolding time.
+// Test data factories. Every test object goes through here — no ad-hoc literals.
+// See specs/11-testing-and-dev.md §"Test factories".
+
+import { randomUUID } from "node:crypto";
 
 import type {
   AppSettings,
@@ -10,26 +11,94 @@ import type {
   PlayerConfig,
 } from "@/shared/types";
 
-export function makeDevice(_overrides?: Partial<Device>): Device {
-  throw new Error("not implemented");
+import { initialState } from "@/server/state/initial";
+
+export function makeDevice(overrides: Partial<Device> = {}): Device {
+  const base: Device = {
+    id: randomUUID(),
+    name: "Test Device",
+    topic: "test/topic",
+  };
+  return { ...base, ...overrides };
 }
 
 export function makePlayerConfig(
-  _overrides?: Partial<PlayerConfig>,
+  overrides: Partial<PlayerConfig> = {},
 ): PlayerConfig {
-  throw new Error("not implemented");
+  const base: PlayerConfig = {
+    id: randomUUID(),
+    name: "Player",
+    timeBudgetMs: 60_000,
+    assignedDeviceId: null,
+  };
+  return { ...base, ...overrides };
 }
 
-export function makeGameConfig(_overrides?: Partial<GameConfig>): GameConfig {
-  throw new Error("not implemented");
+export function makeGameConfig(
+  overrides: Partial<GameConfig> = {},
+): GameConfig {
+  const players = overrides.players ?? [
+    makePlayerConfig({ name: "Alice" }),
+    makePlayerConfig({ name: "Bob" }),
+  ];
+  return {
+    mode: "total-time",
+    endOfTurnTrigger: "screen-tap",
+    turnOrderMode: "fixed",
+    ...overrides,
+    players,
+  };
 }
 
 export function makeAppSettings(
-  _overrides?: Partial<AppSettings>,
+  overrides: Partial<AppSettings> = {},
 ): AppSettings {
-  throw new Error("not implemented");
+  return {
+    mqttBroker: {
+      url: "",
+      clientId: "test-client",
+    },
+    devices: [],
+    ...overrides,
+  };
 }
 
-export function makeGameState(_overrides?: Partial<GameState>): GameState {
-  throw new Error("not implemented");
+export function makeGameState(
+  overrides: Partial<GameState> = {},
+): GameState {
+  return { ...initialState(), ...overrides };
+}
+
+/** Build a state in Ready phase with `n` players, all using `budgetMs`. */
+export function readyState(
+  options: {
+    n?: number;
+    budgetMs?: number;
+    mode?: GameConfig["mode"];
+    trigger?: GameConfig["endOfTurnTrigger"];
+    orderMode?: GameConfig["turnOrderMode"];
+  } = {},
+): GameState {
+  const { n = 2, budgetMs = 60_000, mode = "total-time", trigger = "screen-tap", orderMode = "fixed" } = options;
+  const players = Array.from({ length: n }, (_, i) =>
+    makePlayerConfig({ name: `P${i + 1}`, timeBudgetMs: budgetMs }),
+  );
+  const config = makeGameConfig({
+    mode,
+    endOfTurnTrigger: trigger,
+    turnOrderMode: orderMode,
+    players,
+  });
+  const remainingMs: Record<string, number> = {};
+  for (const p of players) remainingMs[p.id] = p.timeBudgetMs;
+  return makeGameState({
+    phase: "Ready",
+    config,
+    devicesSnapshot: [],
+    currentOrder: players.map((p) => p.id),
+    remainingMs,
+    currentPlayerIdx: null,
+    roundNumber: 0,
+    turnStartedAt: null,
+  });
 }

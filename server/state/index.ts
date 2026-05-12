@@ -1,3 +1,11 @@
-// Reducer entrypoint. Implementation deferred to a future change.
-// See specs/02-session-lifecycle.md (transitions) and specs/04-in-game-behavior.md (runtime rules).
-export {};
+export { reduce } from "./reducer";
+export type { ReduceResult } from "./reducer";
+export { initialState } from "./initial";
+export { validateConfig } from "./validation";
+export type { ValidationResult, ValidationRule } from "./validation";
+export { DomainError } from "./errors";
+export type { DomainErrorCode } from "./errors";
+export type { DomainEvent } from "./events";
+export { defaultConfig, defaultPlayer } from "./defaults";
+export { commitElapsed } from "./tickCore";
+export { checkInvariants, checkInvariantsInDev, InvariantViolation } from "./invariants";
